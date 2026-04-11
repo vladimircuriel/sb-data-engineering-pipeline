@@ -1,1 +1,5 @@
 .DS_Store
+.ruff_cache/
+src/airflow/logs/
+src/airflow/config/*.cfg
+src/airflow/config/*.env
