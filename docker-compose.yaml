@@ -49,6 +49,17 @@ services:
       start_period: 5s
     restart: always
 
+  postgres_landing:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: landing
+      POSTGRES_PASSWORD: landing
+      POSTGRES_DB: landing_zone
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-landing-volume:/var/lib/postgresql/data
+
   redis:
     image: redis:7.2-bookworm
     expose:
@@ -268,3 +279,4 @@ services:
 
 volumes:
   postgres-db-volume:
+  postgres-landing-volume:

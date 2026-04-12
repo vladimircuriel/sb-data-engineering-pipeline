@@ -1,5 +1,10 @@
 .DS_Store
 .ruff_cache/
+.claude/
 src/airflow/logs/
 src/airflow/config/*.cfg
 src/airflow/config/*.env
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
