@@ -8,8 +8,8 @@ x-airflow-common:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -20,7 +20,10 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    PYTHONPATH: '/opt/airflow/src'
+    LANDING_DB_CONN: ${LANDING_DB_CONN}
   volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
     - ${AIRFLOW_PROJ_DIR:-.}/src/airflow/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/src/airflow/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/src/airflow/config:/opt/airflow/config
@@ -32,18 +35,20 @@ x-airflow-common:
       condition: service_healthy
     postgres:
       condition: service_healthy
+    postgres_landing:
+      condition: service_healthy
 
 services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -52,13 +57,19 @@ services:
   postgres_landing:
     image: postgres:16
     environment:
-      POSTGRES_USER: landing
-      POSTGRES_PASSWORD: landing
-      POSTGRES_DB: landing_zone
+      POSTGRES_USER: ${LANDING_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${LANDING_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${LANDING_POSTGRES_DB}
     ports:
       - "5433:5432"
     volumes:
       - postgres-landing-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${LANDING_POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
 
   redis:
     image: redis:7.2-bookworm
