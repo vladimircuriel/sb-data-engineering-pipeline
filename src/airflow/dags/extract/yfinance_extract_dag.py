@@ -285,6 +285,7 @@ def yfinance_extract_banks_dag():
                     entry = {
                         "ticker": t,
                         "date": row["GradeDate"],
+                        "firm": row["Firm"],
                         "to_grade": row["ToGrade"],
                         "from_grade": row["FromGrade"],
                         "action": row["Action"],
