@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -10,9 +10,53 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 
 from config.tickers import BANK_TICKERS, DATE_END, DATE_START
 from db.connection import get_conn
-from db.landing import create_tables, get_last_price_date, insert_metadata, insert_raw, truncate_raw
+from db.landing import (
+    create_tables,
+    get_last_price_date,
+    get_prev_rows_inserted,
+    insert_ingestion_metrics,
+    insert_metadata,
+    insert_raw,
+    truncate_raw,
+)
+from utils.anomaly import detect_volume_anomalies
 from utils.dataframe import validate_df
+from utils.events import (
+    DATA_LANDED,
+    EXTRACT_ERROR,
+    EXTRACTION_FAILED,
+    NO_NEW_DATA,
+    PRE_CHECK_FAILED,
+    VOLUME_ANOMALY,
+    emit_event,
+)
+from utils.metrics import compute_ingestion_metrics
 from utils.requests import safe_request
+
+
+def _on_dag_failure(context):
+    task_id = context.get("task_instance", {}).task_id if context.get("task_instance") else "unknown"
+    emit_event(EXTRACTION_FAILED, {
+        "dag_id": context.get("dag_run", {}).dag_id if context.get("dag_run") else "unknown",
+        "task_id": task_id,
+        "exception": str(context.get("exception", "")),
+    })
+
+
+def _on_precheck_failure(context):
+    ti = context.get("task_instance")
+    emit_event(PRE_CHECK_FAILED, {
+        "task_id": ti.task_id if ti else "unknown",
+        "exception": str(context.get("exception", "")),
+    })
+
+
+def _on_extract_failure(context):
+    ti = context.get("task_instance")
+    emit_event(EXTRACT_ERROR, {
+        "task_id": ti.task_id if ti else "unknown",
+        "exception": str(context.get("exception", "")),
+    })
 
 
 @dag(
@@ -21,6 +65,7 @@ from utils.requests import safe_request
     description="Extracts stock prices, fundamentals, holders and recommendations for US banks from Yahoo Finance and loads them into the PostgreSQL landing zone.",
     schedule=None,
     tags=["extract", "yfinance"],
+    on_failure_callback=_on_dag_failure,
 )
 def yfinance_extract_banks_dag():
 
@@ -31,6 +76,7 @@ def yfinance_extract_banks_dag():
         trigger_dag_id="yfinance_pre_check_dag",
         wait_for_completion=True,
         poke_interval=10,
+        on_failure_callback=_on_precheck_failure,
     )
 
     trigger_postgres_precheck = TriggerDagRunOperator(
@@ -38,9 +84,11 @@ def yfinance_extract_banks_dag():
         trigger_dag_id="postgres_landing_pre_check_dag",
         wait_for_completion=True,
         poke_interval=10,
+        on_failure_callback=_on_precheck_failure,
     )
 
-    @task(retries=3, retry_delay=timedelta(seconds=10))
+    @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
+          on_failure_callback=_on_extract_failure)
     def fetch_basic_info():
         logger.info("Extracting bank company profiles")
         results = []
@@ -78,16 +126,22 @@ def yfinance_extract_banks_dag():
         logger.info(f"Bank company profiles extracted. {len(results)}/{len(BANK_TICKERS)} tickers collected")
         return results
 
-    @task(retries=3, retry_delay=timedelta(seconds=10))
+    @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
+          on_failure_callback=_on_extract_failure)
     def fetch_price(last_price_date):
         logger.info("Extracting stock prices")
         results = []
 
         for t in BANK_TICKERS:
             try:
-                start = str(last_price_date) if last_price_date else DATE_START
-                logger.info(f"{t} fetching price data {start} to {DATE_END}")
-                df = safe_request(lambda: yf.download(t, start=start, end=DATE_END), t)
+                if last_price_date:
+                    start = str(last_price_date)
+                    end = str(date.today())
+                else:
+                    start = DATE_START
+                    end = DATE_END
+                logger.info(f"{t} fetching price data {start} to {end}")
+                df = safe_request(lambda: yf.download(t, start=start, end=end), t)
                 if df is None or df.empty:
                     logger.warning(f"{t} no price data found")
                     continue
@@ -121,7 +175,8 @@ def yfinance_extract_banks_dag():
         logger.info(f"Stock prices extracted. {len(results)} total rows, {len(BANK_TICKERS)} tickers")
         return results
 
-    @task(retries=3, retry_delay=timedelta(seconds=10))
+    @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
+          on_failure_callback=_on_extract_failure)
     def fetch_fundamentals():
         logger.info(f"Extracting quarterly fundamentals {DATE_START} to {DATE_END}")
         results = []
@@ -162,7 +217,8 @@ def yfinance_extract_banks_dag():
         logger.info(f"Quarterly fundamentals extracted. {len(results)} rows, {len(BANK_TICKERS)} tickers")
         return results
 
-    @task(retries=3, retry_delay=timedelta(seconds=10))
+    @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
+          on_failure_callback=_on_extract_failure)
     def fetch_holders():
         logger.info("Extracting institutional holders")
         results = []
@@ -200,7 +256,8 @@ def yfinance_extract_banks_dag():
         logger.info(f"Institutional holders extracted. {len(results)} holder records collected")
         return results
 
-    @task(retries=3, retry_delay=timedelta(seconds=10))
+    @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
+          on_failure_callback=_on_extract_failure)
     def fetch_recommendations():
         logger.info(f"Extracting analyst recommendations {DATE_START} to {DATE_END}")
         results = []
@@ -276,8 +333,29 @@ def yfinance_extract_banks_dag():
 
     @task(retries=3, retry_delay=timedelta(seconds=10))
     def load_to_landing(consolidated):
-
         logger.info("Loading consolidated data to PostgreSQL landing zone")
+
+        last_price_date = get_last_price_date()
+        if last_price_date:
+            cutoff = str(last_price_date)
+            for row in consolidated:
+                row["prices"] = [p for p in (row.get("prices") or []) if p["date"] > cutoff]
+
+        total_new_rows = sum(
+            len(row.get("prices") or []) for row in consolidated
+        )
+
+        if total_new_rows == 0:
+            emit_event(NO_NEW_DATA, {"tickers_checked": len(consolidated)})
+            logger.info("No new data to load, skipping insert")
+            return {"consolidated": consolidated, "skipped": True}
+
+        # Compute metrics and anomalies after filtering
+        metrics = compute_ingestion_metrics(consolidated)
+        prev_rows = get_prev_rows_inserted()
+        anomalies = detect_volume_anomalies(metrics, prev_rows)
+        if anomalies:
+            emit_event(VOLUME_ANOMALY, {"anomalies": anomalies})
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -286,21 +364,42 @@ def yfinance_extract_banks_dag():
                 insert_raw(cur, consolidated)
             conn.commit()
 
-        logger.info(f"Loaded {len(consolidated)} rows into yfinance_raw")
+        emit_event(DATA_LANDED, {"tickers_loaded": len(consolidated), "price_rows": total_new_rows})
+        logger.info(f"Loaded {len(consolidated)} tickers ({total_new_rows} price rows) into yfinance_raw")
+        return {"consolidated": consolidated, "metrics": metrics, "anomalies": anomalies, "skipped": False}
 
     @task
-    def save_metadata(consolidated):
+    def save_metadata(load_result):
+        if load_result.get("skipped"):
+            logger.info("No new data, skipping metadata save")
+            return
+
         with get_conn() as conn:
             with conn.cursor() as cur:
-                insert_metadata(cur, consolidated)
+                insert_metadata(cur, load_result["consolidated"])
             conn.commit()
 
-        logger.info(f"Metadata saved for {len(consolidated)} tickers")
+        logger.info(f"Metadata saved for {len(load_result['consolidated'])} tickers")
+
+    @task
+    def save_metrics(load_result):
+        if load_result.get("skipped"):
+            logger.info("No new data, skipping metrics save")
+            return
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                create_tables(cur)
+                insert_ingestion_metrics(cur, load_result["metrics"], load_result["anomalies"])
+            conn.commit()
+
+        logger.info("Ingestion metrics saved to landing")
 
     @task
     def get_last_price_date_task():
         return get_last_price_date()
 
+    # Task flow
     last_date = get_last_price_date_task()
     basic = fetch_basic_info()
     price = fetch_price(last_date)
@@ -309,10 +408,19 @@ def yfinance_extract_banks_dag():
     recs = fetch_recommendations()
     consolidated = consolidate_data(basic, price, fundamentals, holders, recs)
     loaded = load_to_landing(consolidated)
-    meta = save_metadata(consolidated)
+    meta = save_metadata(loaded)
+    saved_metrics = save_metrics(loaded)
 
-    trigger_postgres_precheck >> trigger_yfinance_precheck >> last_date >> [basic, fundamentals, holders, recs]
-    [basic, price, fundamentals, holders, recs] >> consolidated >> loaded >> meta
+    trigger_postgres_precheck >> trigger_yfinance_precheck >> last_date
+    last_date >> basic
+    last_date >> fundamentals
+    last_date >> holders
+    last_date >> recs
+    basic >> consolidated
+    price >> consolidated
+    fundamentals >> consolidated
+    holders >> consolidated
+    recs >> consolidated
 
 
 yfinance_extract_banks_dag()

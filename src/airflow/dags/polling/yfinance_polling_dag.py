@@ -9,6 +9,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from config.tickers import BANK_TICKERS
 from db.landing import get_last_price_date
 from utils.dataframe import validate_df
+from utils.events import NO_NEW_DATA, emit_event
 from utils.requests import safe_request
 
 
@@ -46,10 +47,12 @@ def yfinance_polling_dag():
         )
         if not isinstance(df, pd.DataFrame):
             logger.warning("Bank tickers price data not found or invalid format")
+            emit_event(NO_NEW_DATA, {"reason": "invalid_response"})
             return False
 
         if df.empty:
             logger.info("No new price data found since last run")
+            emit_event(NO_NEW_DATA, {"reason": "empty_response", "last_price_date": str(last_price_date)})
             return False
 
         validate_df(df, "polling", "BANK_TICKERS")
@@ -63,7 +66,17 @@ def yfinance_polling_dag():
             tickers_with_data = [t for t in close_prices.columns if close_prices[t].notna().any()]
             logger.info(f"Tickers with new data: {len(tickers_with_data)}/{len(BANK_TICKERS)} — {tickers_with_data}")
 
-        return len(new_dates) >= min_new_days
+        enough = len(new_dates) >= min_new_days
+        if not enough:
+            emit_event(NO_NEW_DATA, {"new_days": len(new_dates), "threshold": min_new_days})
+        return enough
+
+    trigger_yfinance_precheck = TriggerDagRunOperator(
+        task_id="trigger_yfinance_precheck",
+        trigger_dag_id="yfinance_pre_check_dag",
+        wait_for_completion=True,
+        poke_interval=10,
+    )
 
     trigger_extract = TriggerDagRunOperator(
         task_id="trigger_extract",
@@ -71,7 +84,7 @@ def yfinance_polling_dag():
         wait_for_completion=False,
     )
 
-    has_enough_new_data() >> trigger_extract
+    trigger_yfinance_precheck >> has_enough_new_data() >> trigger_extract
 
 
 yfinance_polling_dag()
