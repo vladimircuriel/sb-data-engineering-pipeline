@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Any
 
 from airflow.sdk import dag, task
 from airflow.providers.docker.operators.docker import DockerOperator
@@ -43,30 +44,40 @@ def dbt_run_dag():
     host_proj_dir = os.environ.get("HOST_PROJ_DIR", "")
     compose_project = os.environ.get("COMPOSE_PROJECT_NAME", "sb_pipeline")
 
-    dbt_run = DockerOperator(
-        task_id="dbt_run",
-        image=f"{compose_project}-dbt",
-        command="dbt run",
-        docker_url="unix://var/run/docker.sock",
-        network_mode=f"{compose_project}_default",
-        environment={
-            "CLICKHOUSE_HOST":      os.environ.get("CLICKHOUSE_HOST", "clickhouse"),
+    docker_common: dict[str, Any] = {
+        "image": f"{compose_project}-dbt",
+        "docker_url": "unix://var/run/docker.sock",
+        "network_mode": f"{compose_project}_default",
+        "environment": {
+            "CLICKHOUSE_HOST": os.environ.get("CLICKHOUSE_HOST", "clickhouse"),
             "CLICKHOUSE_HTTP_PORT": os.environ.get("CLICKHOUSE_HTTP_PORT", "8123"),
-            "CLICKHOUSE_USER":      os.environ.get("CLICKHOUSE_USER", "admin"),
-            "CLICKHOUSE_PASSWORD":  os.environ.get("CLICKHOUSE_PASSWORD", "admin"),
-            "CLICKHOUSE_DB":        os.environ.get("CLICKHOUSE_DB", "dwh"),
+            "CLICKHOUSE_USER": os.environ.get("CLICKHOUSE_USER", "admin"),
+            "CLICKHOUSE_PASSWORD": os.environ.get("CLICKHOUSE_PASSWORD", "admin"),
+            "CLICKHOUSE_DB": os.environ.get("CLICKHOUSE_DB", "dwh"),
         },
-        mounts=[
+        "mounts": [
             Mount(
                 source=f"{host_proj_dir}/src/dbt",
                 target="/dbt",
                 type="bind",
             )
         ],
-        mount_tmp_dir=False,
-        auto_remove="success",
-        force_pull=False,
-        on_failure_callback=_on_failure,
+        "mount_tmp_dir": False,
+        "auto_remove": "success",
+        "force_pull": False,
+        "on_failure_callback": _on_failure,
+    }
+
+    dbt_run = DockerOperator(
+        task_id="dbt_run",
+        command="dbt run",
+        **docker_common,
+    )
+
+    dbt_test = DockerOperator(
+        task_id="dbt_test",
+        command="dbt test",
+        **docker_common,
     )
 
     @task
@@ -74,7 +85,7 @@ def dbt_run_dag():
         logger.info("dbt run completed successfully")
         emit_event(TRANSFORM_COMPLETED, {"dag_id": "dbt_run_dag"})
 
-    trigger_dbt_precheck >> dbt_run >> notify_completed()
+    trigger_dbt_precheck >> dbt_run >> dbt_test >> notify_completed()
 
 
 dbt_run_dag()

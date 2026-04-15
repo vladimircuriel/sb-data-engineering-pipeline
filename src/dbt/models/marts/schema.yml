@@ -1,0 +1,166 @@
+version: 2
+
+models:
+  - name: dim_bank
+    description: "Bank/company dimension with static attributes sourced from yfinance company data."
+    columns:
+      - name: bank_id
+        description: "Stock ticker symbol (primary key)."
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_date
+    description: "Date dimension spanning 1990-2050 with calendar attributes."
+    columns:
+      - name: date_id
+        description: "Surrogate key in YYYYMMDD integer format (primary key)."
+        tests:
+          - not_null
+          - unique
+      - name: year
+        description: "Calendar year."
+        tests:
+          - not_null
+      - name: month
+        description: "Calendar month (1-12)."
+        tests:
+          - not_null
+      - name: quarter
+        description: "Calendar quarter (1-4)."
+        tests:
+          - not_null
+
+  - name: dim_holder
+    description: "Institutional holder dimension derived from yfinance holders data."
+    columns:
+      - name: holder_id
+        description: "Holder name used as surrogate key (primary key)."
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_agency_rating
+    description: "Analyst firm/agency dimension derived from yfinance recommendations."
+    columns:
+      - name: agency_id
+        description: "Firm name used as surrogate key (primary key)."
+        tests:
+          - not_null
+          - unique
+
+  - name: fact_price
+    description: "Daily OHLCV price fact table partitioned by year."
+    columns:
+      - name: bank_id
+        description: "FK to dim_bank."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_bank')
+              field: bank_id
+      - name: date_id
+        description: "FK to dim_date in YYYYMMDD format."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_id
+      - name: close_price
+        description: "Closing price."
+        tests:
+          - not_null
+      - name: volume
+        description: "Trading volume."
+        tests:
+          - not_null
+
+  - name: fact_fundamentals
+    description: "Quarterly financial fundamentals fact table."
+    columns:
+      - name: bank_id
+        description: "FK to dim_bank."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_bank')
+              field: bank_id
+      - name: date_id
+        description: "FK to dim_date in YYYYMMDD format."
+        tests:
+          - not_null
+
+  - name: fact_holders
+    description: "Institutional holder position fact table."
+    columns:
+      - name: bank_id
+        description: "FK to dim_bank."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_bank')
+              field: bank_id
+      - name: date_id
+        description: "FK to dim_date in YYYYMMDD format."
+        tests:
+          - not_null
+      - name: holder_id
+        description: "FK to dim_holder."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_holder')
+              field: holder_id
+
+  - name: fact_ratings
+    description: "Analyst recommendation fact table."
+    columns:
+      - name: bank_id
+        description: "FK to dim_bank."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_bank')
+              field: bank_id
+      - name: date_id
+        description: "FK to dim_date in YYYYMMDD format."
+        tests:
+          - not_null
+      - name: agency_id
+        description: "FK to dim_agency_rating."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_agency_rating')
+              field: agency_id
+
+  - name: monthly_stock_summary
+    description: "Monthly aggregated price summary for 2024 and 2025."
+    columns:
+      - name: bank_id
+        description: "FK to dim_bank."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_bank')
+              field: bank_id
+      - name: year
+        description: "Calendar year (2024 or 2025)."
+        tests:
+          - not_null
+      - name: month
+        description: "Calendar month (1-12)."
+        tests:
+          - not_null
+      - name: avg_open_price
+        description: "Average daily opening price for the month."
+        tests:
+          - not_null
+      - name: avg_close_price
+        description: "Average daily closing price for the month."
+        tests:
+          - not_null
+      - name: avg_volume
+        description: "Average daily trading volume for the month."
+        tests:
+          - not_null

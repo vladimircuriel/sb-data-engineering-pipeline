@@ -1,0 +1,75 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: "Cleaned daily OHLCV price data from yfinance landing table."
+    columns:
+      - name: ticker
+        description: "Stock ticker symbol."
+        tests:
+          - not_null
+      - name: date
+        description: "Trading date."
+        tests:
+          - not_null
+      - name: close
+        description: "Closing price."
+        tests:
+          - not_null
+      - name: volume
+        description: "Trading volume."
+        tests:
+          - not_null
+
+  - name: stg_company
+    description: "Cleaned company metadata from yfinance landing table."
+    columns:
+      - name: ticker
+        description: "Stock ticker symbol (primary key)."
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_fundamentals
+    description: "Cleaned quarterly financial fundamentals from yfinance landing table."
+    columns:
+      - name: ticker
+        description: "Stock ticker symbol."
+        tests:
+          - not_null
+      - name: date
+        description: "Reporting date."
+        tests:
+          - not_null
+
+  - name: stg_holders
+    description: "Cleaned institutional holder positions from yfinance landing table."
+    columns:
+      - name: ticker
+        description: "Stock ticker symbol."
+        tests:
+          - not_null
+      - name: date
+        description: "Reporting date."
+        tests:
+          - not_null
+      - name: holder
+        description: "Name of the institutional holder."
+        tests:
+          - not_null
+
+  - name: stg_recommendations
+    description: "Cleaned analyst recommendations from yfinance landing table."
+    columns:
+      - name: ticker
+        description: "Stock ticker symbol."
+        tests:
+          - not_null
+      - name: date
+        description: "Date of the recommendation."
+        tests:
+          - not_null
+      - name: firm
+        description: "Analyst firm issuing the recommendation."
+        tests:
+          - not_null
