@@ -23,19 +23,19 @@ up:
 	echo "CLIENT_SECRET=$$CLIENT_SECRET" >> .env; \
 	echo "Airbyte credentials saved to .env"
 
-	@echo "Starting Airflow stack..."
+	@echo "Starting Airflow and ClickHouse stack..."
 	docker compose up --build -d
 
 restart-up:
-	@echo "Starting Airflow stack..."
+	@echo "Starting Airflow and ClickHouse stack..."
 	docker compose up --build -d
 
 down:
-	@echo "Stopping Airflow stack..."
+	@echo "Stopping Airflow and ClickHouse stack..."
 	docker compose down
 
 down-all:
-	@echo "Stopping Airflow stack..."
+	@echo "Stopping Airflow and ClickHouse stack..."
 	docker compose down
 
 	@echo "Stopping Airbyte..."
