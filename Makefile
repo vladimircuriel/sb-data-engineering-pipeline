@@ -16,7 +16,7 @@ up:
 	PASSWORD="$$(echo "$$CREDS" | grep 'Password:' | awk '{print $$2}')"; \
 	CLIENT_ID="$$(echo "$$CREDS" | grep 'Client-Id:' | awk '{print $$2}')"; \
 	CLIENT_SECRET="$$(echo "$$CREDS" | grep 'Client-Secret:' | awk '{print $$2}')"; \
-	sed -i '' '/^AIRBYTE_EMAIL=/d;/^AIRBYTE_PASSWORD=/d;/^CLIENT_ID=/d;/^CLIENT_SECRET=/d' .env; \
+	grep -v -E '^(AIRBYTE_EMAIL|AIRBYTE_PASSWORD|CLIENT_ID|CLIENT_SECRET)=' .env > .env.tmp && mv .env.tmp .env; \
 	echo "AIRBYTE_EMAIL=$$EMAIL" >> .env; \
 	echo "AIRBYTE_PASSWORD=$$PASSWORD" >> .env; \
 	echo "CLIENT_ID=$$CLIENT_ID" >> .env; \
