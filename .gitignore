@@ -12,3 +12,4 @@ src/airflow/config/*.env
 src/dbt/logs/
 src/dbt/target/
 src/dbt/.user.yml
+notes.md
