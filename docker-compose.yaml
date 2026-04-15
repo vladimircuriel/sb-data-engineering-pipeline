@@ -29,7 +29,10 @@ x-airflow-common:
     CLICKHOUSE_DB: ${CLICKHOUSE_DB}
     AIRFLOW_CONN_AIRBYTE_DEFAULT: ${AIRFLOW_CONN_AIRBYTE_DEFAULT}
     AIRFLOW_VAR_AIRBYTE_LANDING_TO_CLICKHOUSE_CONNECTION_ID: ${AIRFLOW_VAR_AIRBYTE_LANDING_TO_CLICKHOUSE_CONNECTION_ID}
+    HOST_PROJ_DIR: ${HOST_PROJ_DIR}
+    COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
   volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
     - ${AIRFLOW_PROJ_DIR:-.}/src:/opt/airflow/src
     - ${AIRFLOW_PROJ_DIR:-.}/src/airflow/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/src/airflow/logs:/opt/airflow/logs
@@ -330,6 +333,27 @@ services:
       clickhouse:
         condition: service_healthy
     restart: unless-stopped
+
+  dbt:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbt
+    env_file:
+      - ${ENV_FILE_PATH:-.env}
+    environment:
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    volumes:
+      - ./src/dbt:/dbt
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    profiles:
+      - dbt
+    restart: "no"
 
 volumes:
   postgres-db-volume:

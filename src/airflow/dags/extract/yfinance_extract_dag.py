@@ -2,9 +2,6 @@ import logging
 import time
 from datetime import date, timedelta
 
-import pandas as pd
-import yfinance as yf
-
 from airflow.sdk import dag, task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
@@ -96,6 +93,7 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_basic_info():
+        import yfinance as yf
         logger.info("Extracting bank company profiles")
         results = []
 
@@ -135,6 +133,8 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_price(last_price_date):
+        import pandas as pd
+        import yfinance as yf
         logger.info("Extracting stock prices")
         results = []
 
@@ -185,6 +185,8 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_fundamentals(last_fundamentals_date):
+        import pandas as pd
+        import yfinance as yf
         start = str(last_fundamentals_date) if last_fundamentals_date else DATE_START
         end = str(date.today()) if last_fundamentals_date else DATE_END
         logger.info(f"Extracting quarterly fundamentals {start} to {end}")
@@ -229,6 +231,8 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_holders(last_holders_date):
+        import pandas as pd
+        import yfinance as yf
         start = str(last_holders_date) if last_holders_date else DATE_START
         logger.info(f"Extracting institutional holders since {start}")
         results = []
@@ -275,6 +279,8 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_recommendations(last_recommendations_date):
+        import pandas as pd
+        import yfinance as yf
         start = str(last_recommendations_date) if last_recommendations_date else DATE_START
         end = str(date.today()) if last_recommendations_date else DATE_END
         logger.info(f"Extracting analyst recommendations {start} to {end}")

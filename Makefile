@@ -23,10 +23,14 @@ up:
 	echo "CLIENT_SECRET=$$CLIENT_SECRET" >> .env; \
 	echo "Airbyte credentials saved to .env"
 
+	@echo "Building dbt image..."
+	docker compose build dbt
 	@echo "Starting Airflow and ClickHouse stack..."
 	docker compose up --build -d
 
 restart-up:
+	@echo "Building dbt image..."
+	docker compose build dbt
 	@echo "Starting Airflow and ClickHouse stack..."
 	docker compose up --build -d
 

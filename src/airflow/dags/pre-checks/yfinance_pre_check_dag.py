@@ -1,5 +1,4 @@
 import logging
-import yfinance as yf
 
 from airflow.sdk import dag, task
 from datetime import timedelta
@@ -34,6 +33,7 @@ def yfinance_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_yfinance_connection():
+        import yfinance as yf
         logger.info("Testing connection to Yahoo Finance using yfinance")
 
         try:

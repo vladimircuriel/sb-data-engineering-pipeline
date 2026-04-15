@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: landing
+    schema: staging
+    tables:
+      - name: yfinance_company
+      - name: yfinance_prices
+      - name: yfinance_fundamentals
+      - name: yfinance_holders
+      - name: yfinance_recommendations
