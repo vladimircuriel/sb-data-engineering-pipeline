@@ -8,6 +8,28 @@ DROP_THRESHOLD_PCT = 50
 
 
 def detect_volume_anomalies(metrics: dict, prev_rows_inserted: int | None) -> list[dict]:
+    """Analyse ingestion metrics and return a list of detected anomalies.
+
+    Three checks are performed:
+
+    * **Missing tickers** – tickers present in ``BANK_TICKERS`` but absent from
+      the current run's ``rows_per_ticker`` map.
+    * **Tickers with no data** – tickers that returned zero rows in every
+      category (prices, fundamentals, holders, recommendations).
+    * **Volume drop** – total price rows fell by ``DROP_THRESHOLD_PCT`` percent
+      or more compared to the previous run.
+
+    Args:
+        metrics: Output of :func:`~utils.metrics.compute_ingestion_metrics`,
+            expected keys: ``rows_per_ticker``, ``tickers_with_no_data``,
+            ``total_price_rows``.
+        prev_rows_inserted: Price-row count from the most recent previous run,
+            or ``None`` if no prior run exists.
+
+    Returns:
+        A list of anomaly dicts.  Each dict contains at minimum ``type`` and
+        ``detail`` keys; additional keys vary by anomaly type.
+    """
     anomalies: list[dict] = []
 
     # Check for missing tickers

@@ -6,6 +6,29 @@ CATEGORIES = ("prices", "fundamentals", "holders", "recommendations")
 
 
 def compute_ingestion_metrics(consolidated: list[dict]) -> dict:
+    """Compute summary metrics from the consolidated extraction results.
+
+    For each ticker the function counts rows extracted per category.  A ticker
+    is considered *complete* when it has at least one row in every category.
+
+    Args:
+        consolidated: List of per-ticker dicts as produced by the
+            ``consolidate_data`` task.  Each dict must contain the keys
+            ``ticker``, ``prices``, ``fundamentals``, ``holders``, and
+            ``recommendations``.
+
+    Returns:
+        A dict with the following keys:
+
+        * ``total_tickers`` (int): Total number of tickers processed.
+        * ``total_price_rows`` (int): Sum of price rows across all tickers.
+        * ``tickers_with_no_data`` (list[str]): Tickers with zero rows in
+          every category.
+        * ``rows_per_ticker`` (dict[str, dict[str, int]]): Per-category row
+          counts keyed by ticker symbol.
+        * ``completeness_pct`` (float): Percentage of tickers that are
+          complete, rounded to two decimal places.
+    """
     total_tickers = len(consolidated)
     rows_per_ticker: dict[str, dict[str, int]] = {}
     tickers_with_no_data: list[str] = []

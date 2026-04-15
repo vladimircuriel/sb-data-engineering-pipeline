@@ -10,6 +10,11 @@ from utils.events import emit_event, PRE_CHECK_FAILED, EXTRACTION_FAILED, DATA_L
 
 
 def _on_dag_failure(context):
+    """DAG-level failure callback that emits an ``EXTRACTION_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow context dict provided automatically on DAG failure.
+    """
     task_id = context.get("task_instance").task_id if context.get("task_instance") else "unknown"
     emit_event(EXTRACTION_FAILED, {
         "dag_id": "landing_to_clickhouse_sync_dag",
@@ -19,6 +24,11 @@ def _on_dag_failure(context):
 
 
 def _on_precheck_failure(context):
+    """Task-level failure callback for pre-check trigger tasks that emits a ``PRE_CHECK_FAILED`` event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "dag_id": "landing_to_clickhouse_sync_dag",
@@ -40,7 +50,20 @@ logger = logging.getLogger("airflow.integration")
     on_failure_callback=_on_dag_failure,
 )
 def landing_to_clickhouse_sync_dag():
+    """Synchronise all PostgreSQL landing tables to ClickHouse staging via Airbyte.
 
+    Runs three pre-check DAGs in parallel (Airbyte, PostgreSQL, ClickHouse),
+    triggers an Airbyte sync, waits for it to complete, updates the sync
+    watermark, and then fires the dbt transformation DAG.
+
+    Task flow::
+
+        [trigger_airbyte_precheck, trigger_postgres_precheck, trigger_clickhouse_precheck]
+            >> sync_landing_to_clickhouse
+            >> wait_for_sync
+            >> update_watermark
+            >> trigger_dbt_run
+    """
     trigger_airbyte_precheck = TriggerDagRunOperator(
         task_id="trigger_airbyte_precheck",
         trigger_dag_id="airbyte_pre_check_dag",
@@ -84,6 +107,13 @@ def landing_to_clickhouse_sync_dag():
 
     @task
     def update_watermark():
+        """Set the ``LANDING_LAST_SYNC_AT`` Airflow Variable to the latest run timestamp.
+
+        Reads the maximum ``run_at`` value from ``yfinance_run_metadata`` and
+        stores it as an Airflow Variable so the landing-zone polling DAG can
+        determine whether new data has arrived since the last sync.  Also emits
+        a ``DATA_LANDED`` event when the watermark is updated.
+        """
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT MAX(run_at) FROM yfinance_run_metadata")

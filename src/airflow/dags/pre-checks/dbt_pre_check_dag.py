@@ -10,6 +10,11 @@ from utils.events import PRE_CHECK_FAILED, NO_NEW_DATA, emit_event
 
 
 def _on_failure(context):
+    """Airflow failure callback that emits a ``PRE_CHECK_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "dag_id": "dbt_pre_check_dag",
@@ -26,7 +31,11 @@ def _on_failure(context):
     tags=["pre-check", "dbt", "clickhouse"],
 )
 def dbt_pre_check_dag():
+    """Verify that ClickHouse is reachable, the dbt Docker image exists, and staging has data.
 
+    Task flow:
+        check_clickhouse_connection >> check_staging_has_data >> check_dbt_image
+    """
     logger = logging.getLogger("airflow.pre_checks")
 
     @task(
@@ -36,6 +45,11 @@ def dbt_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_clickhouse_connection():
+        """Execute ``SELECT 1`` against ClickHouse and assert the response equals ``1``.
+
+        Raises:
+            Exception: If ClickHouse is unreachable or returns an unexpected result.
+        """
         host = os.environ.get("CLICKHOUSE_HOST", "clickhouse")
         port = os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")
         user = os.environ.get("CLICKHOUSE_USER", "admin")
@@ -59,6 +73,11 @@ def dbt_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_dbt_image():
+        """Assert that the dbt Docker image built by this project exists locally.
+
+        Raises:
+            Exception: If the image is not found in the local Docker daemon.
+        """
         compose_project = os.environ.get("COMPOSE_PROJECT_NAME", "sb_pipeline")
         image_name = f"{compose_project}-dbt"
 
@@ -76,6 +95,14 @@ def dbt_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_staging_has_data():
+        """Verify that at least one ClickHouse staging table contains rows.
+
+        Queries each expected staging table and raises if all are empty,
+        emitting a ``NO_NEW_DATA`` event before raising.
+
+        Raises:
+            Exception: If a staging table query fails or all tables are empty.
+        """
         host = os.environ.get("CLICKHOUSE_HOST", "clickhouse")
         port = os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")
         user = os.environ.get("CLICKHOUSE_USER", "admin")

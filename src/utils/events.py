@@ -19,6 +19,23 @@ SYNC_TRIGGERED = "SYNC_TRIGGERED"
 
 
 def emit_event(event_type: str, context: dict | None = None) -> dict:
+    """Emit a pipeline event to the log and persist it in PostgreSQL.
+
+    The event is always written to the Airflow logger regardless of whether the
+    database write succeeds.  A failed database write is logged as an exception
+    but does not propagate so that pipeline tasks are never blocked by event
+    persistence errors.
+
+    Args:
+        event_type: One of the event-type constants defined in this module
+            (e.g. ``DATA_LANDED``, ``EXTRACTION_FAILED``).
+        context: Optional dict with additional metadata to store alongside the
+            event.  Defaults to an empty dict when ``None``.
+
+    Returns:
+        The event dict that was built, containing ``event_type``, ``timestamp``
+        (ISO-8601 UTC), and ``context``.
+    """
     event = {
         "event_type": event_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),

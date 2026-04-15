@@ -10,6 +10,11 @@ from utils.events import PRE_CHECK_FAILED, emit_event
 
 
 def _on_failure(context):
+    """Airflow failure callback that emits a ``PRE_CHECK_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "dag_id": "airbyte_pre_check_dag",
@@ -26,6 +31,11 @@ def _on_failure(context):
     tags=["pre-check", "airbyte"],
 )
 def airbyte_pre_check_dag():
+    """Verify that the ``airbyte_default`` Airflow connection exists and Airbyte is reachable.
+
+    Task flow:
+        check_airflow_connection >> check_airbyte_health
+    """
     logger = logging.getLogger("airflow.pre_checks")
 
     @task(
@@ -35,6 +45,11 @@ def airbyte_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_airflow_connection():
+        """Verify that the ``airbyte_default`` connection is registered in Airflow.
+
+        Raises:
+            AirflowNotFoundException: If the connection does not exist.
+        """
         logger.info("Checking airbyte_default Airflow connection exists")
 
         conn = Connection.get_connection_from_secrets("airbyte_default")
@@ -50,6 +65,11 @@ def airbyte_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_airbyte_health():
+        """Send a GET request to the Airbyte health endpoint and assert a 200 response.
+
+        Raises:
+            Exception: If the HTTP status code is not 200.
+        """
         airbyte_host = os.environ.get("AIRBYTE_HOST", "http://host.docker.internal:8000")
         url = f"{airbyte_host}/api/public/v1/health"
 

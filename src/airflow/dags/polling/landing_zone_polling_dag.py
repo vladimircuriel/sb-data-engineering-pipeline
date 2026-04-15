@@ -17,11 +17,30 @@ from utils.events import NO_NEW_DATA, SYNC_TRIGGERED, emit_event
     tags=["polling", "landing", "clickhouse"],
 )
 def landing_zone_polling_dag():
+    """Poll the PostgreSQL landing zone for new runs and trigger a ClickHouse sync if detected.
 
+    Scheduled every 15 minutes on weekdays.  Uses the ``LANDING_LAST_SYNC_AT``
+    Airflow Variable as a watermark.  If new landing runs are found the DAG
+    triggers ``landing_to_clickhouse_sync_dag``; otherwise it short-circuits.
+
+    Task flow::
+
+        has_new_data >> trigger_landing_to_clickhouse_sync
+    """
     logger = logging.getLogger("airflow.polling")
 
     @task.short_circuit
     def has_new_data():
+        """Check whether new landing runs exist since the last sync watermark.
+
+        Compares ``yfinance_run_metadata`` rows against the
+        ``LANDING_LAST_SYNC_AT`` Airflow Variable.  Emits ``NO_NEW_DATA`` when
+        nothing new is found and ``SYNC_TRIGGERED`` when the sync will proceed.
+
+        Returns:
+            bool: ``True`` if new runs are detected (pipeline continues),
+            ``False`` to short-circuit the DAG.
+        """
         last_sync_at = Variable.get("LANDING_LAST_SYNC_AT", default=None)
         logger.info(f"Last sync watermark: {last_sync_at}")
 

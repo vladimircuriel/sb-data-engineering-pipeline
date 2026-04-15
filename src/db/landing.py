@@ -96,6 +96,16 @@ _DDL_INGESTION_METRICS = """
 
 
 def create_tables(cur) -> None:
+    """Execute all DDL statements to create landing tables if they do not exist.
+
+    Creates the following tables: ``yfinance_company``, ``yfinance_prices``,
+    ``yfinance_fundamentals``, ``yfinance_holders``,
+    ``yfinance_recommendations``, ``yfinance_run_metadata``,
+    ``yfinance_ingestion_metrics``, and ``pipeline_events``.
+
+    Args:
+        cur: An open psycopg2 cursor used to execute the statements.
+    """
     cur.execute(_DDL_YFINANCE_COMPANY)
     cur.execute(_DDL_YFINANCE_PRICES)
     cur.execute(_DDL_YFINANCE_FUNDAMENTALS)
@@ -107,6 +117,17 @@ def create_tables(cur) -> None:
 
 
 def upsert_company(cur, row: dict) -> None:
+    """Insert or update a company profile row in ``yfinance_company``.
+
+    Uses ``ON CONFLICT (ticker) DO UPDATE`` so that re-running the extraction
+    always reflects the latest profile data.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        row: Dict containing the company fields to persist.  Expected keys:
+            ``symbol``, ``industry``, ``sector``, ``employees``, ``city``,
+            ``phone``, ``state``, ``country``, ``website``, ``address``.
+    """
     cur.execute(
         """
         INSERT INTO yfinance_company
@@ -140,6 +161,17 @@ def upsert_company(cur, row: dict) -> None:
 
 
 def insert_prices(cur, ticker: str, prices: list[dict]) -> None:
+    """Insert daily price rows for a single ticker into ``yfinance_prices``.
+
+    Duplicate ``(ticker, date)`` pairs are silently ignored via
+    ``ON CONFLICT DO NOTHING``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        ticker: The bank ticker symbol (e.g. ``"BAC"``).
+        prices: List of price dicts.  Each dict must contain ``date`` and may
+            contain ``open``, ``high``, ``low``, ``close``, ``volume``.
+    """
     for row in prices:
         cur.execute(
             """
@@ -153,6 +185,17 @@ def insert_prices(cur, ticker: str, prices: list[dict]) -> None:
 
 
 def insert_fundamentals(cur, ticker: str, fundamentals: list[dict]) -> None:
+    """Insert quarterly fundamental snapshots into ``yfinance_fundamentals``.
+
+    Duplicate ``(ticker, date)`` pairs are silently ignored via
+    ``ON CONFLICT DO NOTHING``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        ticker: The bank ticker symbol.
+        fundamentals: List of fundamental dicts.  Each dict must contain
+            ``date`` and may contain ``assets``, ``debt``, ``shares``.
+    """
     for row in fundamentals:
         cur.execute(
             """
@@ -165,6 +208,17 @@ def insert_fundamentals(cur, ticker: str, fundamentals: list[dict]) -> None:
 
 
 def insert_holders(cur, ticker: str, holders: list[dict]) -> None:
+    """Insert institutional holder rows into ``yfinance_holders``.
+
+    Duplicate ``(ticker, holder, date)`` triplets are silently ignored via
+    ``ON CONFLICT DO NOTHING``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        ticker: The bank ticker symbol.
+        holders: List of holder dicts.  Each dict must contain ``holder`` and
+            ``date`` and may contain ``shares`` and ``value``.
+    """
     for row in holders:
         cur.execute(
             """
@@ -177,6 +231,18 @@ def insert_holders(cur, ticker: str, holders: list[dict]) -> None:
 
 
 def insert_recommendations(cur, ticker: str, recommendations: list[dict]) -> None:
+    """Insert analyst recommendation rows into ``yfinance_recommendations``.
+
+    Duplicate ``(ticker, date, firm)`` triplets are silently ignored via
+    ``ON CONFLICT DO NOTHING``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        ticker: The bank ticker symbol.
+        recommendations: List of recommendation dicts.  Each dict must contain
+            ``date`` and ``firm`` and may contain ``to_grade``, ``from_grade``,
+            and ``action``.
+    """
     for row in recommendations:
         cur.execute(
             """
@@ -190,6 +256,13 @@ def insert_recommendations(cur, ticker: str, recommendations: list[dict]) -> Non
 
 
 def insert_metadata(cur, consolidated: list[dict]) -> None:
+    """Record a run summary row in ``yfinance_run_metadata``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        consolidated: List of per-ticker dicts from the extraction run.  The
+            function counts total tickers and total price rows from this list.
+    """
     total_price_rows = sum(len(row.get("prices") or []) for row in consolidated)
 
     cur.execute(
@@ -202,6 +275,13 @@ def insert_metadata(cur, consolidated: list[dict]) -> None:
 
 
 def insert_event(cur, event_type: str, context: dict | None = None) -> None:
+    """Insert a pipeline event row into ``pipeline_events``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        event_type: Short label identifying the event (e.g. ``"DATA_LANDED"``).
+        context: Optional dict with additional metadata stored as JSONB.
+    """
     cur.execute(
         """
         INSERT INTO pipeline_events (event_type, context)
@@ -212,6 +292,17 @@ def insert_event(cur, event_type: str, context: dict | None = None) -> None:
 
 
 def insert_ingestion_metrics(cur, metrics: dict, anomalies: list[dict]) -> None:
+    """Persist computed ingestion metrics and anomalies in ``yfinance_ingestion_metrics``.
+
+    Args:
+        cur: An open psycopg2 cursor.
+        metrics: Dict produced by
+            :func:`~utils.metrics.compute_ingestion_metrics`.  Required keys:
+            ``total_tickers``, ``total_price_rows``, ``completeness_pct``.
+        anomalies: List of anomaly dicts produced by
+            :func:`~utils.anomaly.detect_volume_anomalies`.  Stored as JSONB;
+            ``None`` is written when the list is empty.
+    """
     cur.execute(
         """
         INSERT INTO yfinance_ingestion_metrics
@@ -228,6 +319,15 @@ def insert_ingestion_metrics(cur, metrics: dict, anomalies: list[dict]) -> None:
 
 
 def get_prev_rows_inserted():
+    """Return the price-row count from the most recent run in ``yfinance_run_metadata``.
+
+    Opens its own connection so it can be called outside of an active
+    transaction.
+
+    Returns:
+        int | None: The ``rows_inserted`` value of the latest run, or ``None``
+        if the table does not exist or has no rows yet.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -251,6 +351,18 @@ def get_prev_rows_inserted():
 
 
 def _get_last_date(table: str):
+    """Return the maximum ``date`` value from the given landing table.
+
+    Checks whether the table exists before querying it so the function is safe
+    to call on a fresh database with no tables yet.
+
+    Args:
+        table: Unqualified table name to query (e.g. ``"yfinance_prices"``).
+
+    Returns:
+        datetime.date | None: The maximum date found, or ``None`` if the table
+        does not exist or contains no rows.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -269,16 +381,36 @@ def _get_last_date(table: str):
 
 
 def get_last_price_date():
+    """Return the most recent date stored in ``yfinance_prices``.
+
+    Returns:
+        datetime.date | None: Latest price date, or ``None`` if no data exists.
+    """
     return _get_last_date("yfinance_prices")
 
 
 def get_last_fundamentals_date():
+    """Return the most recent date stored in ``yfinance_fundamentals``.
+
+    Returns:
+        datetime.date | None: Latest fundamentals date, or ``None`` if no data exists.
+    """
     return _get_last_date("yfinance_fundamentals")
 
 
 def get_last_holders_date():
+    """Return the most recent date stored in ``yfinance_holders``.
+
+    Returns:
+        datetime.date | None: Latest holders date, or ``None`` if no data exists.
+    """
     return _get_last_date("yfinance_holders")
 
 
 def get_last_recommendations_date():
+    """Return the most recent date stored in ``yfinance_recommendations``.
+
+    Returns:
+        datetime.date | None: Latest recommendations date, or ``None`` if no data exists.
+    """
     return _get_last_date("yfinance_recommendations")

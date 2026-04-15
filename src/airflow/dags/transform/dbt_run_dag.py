@@ -11,6 +11,11 @@ from utils.events import emit_event, TRANSFORM_COMPLETED, TRANSFORM_FAILED
 
 
 def _on_failure(context):
+    """Airflow failure callback that emits a ``TRANSFORM_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(TRANSFORM_FAILED, {
         "dag_id": "dbt_run_dag",
@@ -32,7 +37,16 @@ logger = logging.getLogger("airflow.transform")
     on_failure_callback=_on_failure,
 )
 def dbt_run_dag():
+    """Run dbt transformations against ClickHouse staging data and execute dbt tests.
 
+    Triggers the dbt pre-check DAG first, then runs ``dbt run`` and ``dbt test``
+    inside a Docker container built from the project's dbt image.  Emits a
+    ``TRANSFORM_COMPLETED`` event on success.
+
+    Task flow::
+
+        trigger_dbt_precheck >> dbt_run >> dbt_test >> notify_completed
+    """
     trigger_dbt_precheck = TriggerDagRunOperator(
         task_id="trigger_dbt_precheck",
         trigger_dag_id="dbt_pre_check_dag",
@@ -82,6 +96,7 @@ def dbt_run_dag():
 
     @task
     def notify_completed():
+        """Emit a ``TRANSFORM_COMPLETED`` pipeline event after a successful dbt run."""
         logger.info("dbt run completed successfully")
         emit_event(TRANSFORM_COMPLETED, {"dag_id": "dbt_run_dag"})
 

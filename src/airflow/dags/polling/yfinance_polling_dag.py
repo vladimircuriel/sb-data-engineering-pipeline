@@ -23,11 +23,36 @@ from utils.requests import safe_request
     tags=["polling", "yfinance"],
 )
 def yfinance_polling_dag():
+    """Poll Yahoo Finance for new trading days and trigger the extraction DAG if the threshold is met.
 
+    Scheduled Monday–Friday at 16:00 (after US market close).  Downloads the
+    latest prices for all bank tickers and counts new trading days since the
+    last recorded price date.  Triggers ``yfinance_extract_banks_dag`` only
+    when the number of new days is at or above the ``min_new_days`` DAG param
+    (default: 1).
+
+    Task flow::
+
+        trigger_yfinance_precheck >> has_enough_new_data >> trigger_extract
+    """
     logger = logging.getLogger("airflow.polling")
 
     @task.short_circuit
     def has_enough_new_data(**context):
+        """Determine whether enough new trading days exist to justify a full extraction run.
+
+        Downloads recent price data for all bank tickers and counts dates newer
+        than the last recorded price date.  Emits ``NO_NEW_DATA`` when below
+        the threshold or ``SYNC_TRIGGERED`` when the extraction will proceed.
+
+        Args:
+            **context: Airflow task context injected automatically.  The
+                ``params`` key must contain ``min_new_days`` (int).
+
+        Returns:
+            bool: ``True`` if new days >= ``min_new_days`` (pipeline continues),
+            ``False`` to short-circuit the DAG.
+        """
         import pandas as pd
         import yfinance as yf
         min_new_days: int = context["params"]["min_new_days"]

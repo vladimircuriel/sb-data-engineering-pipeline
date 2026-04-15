@@ -7,6 +7,11 @@ from utils.events import PRE_CHECK_FAILED, emit_event
 
 
 def _on_failure(context):
+    """Airflow failure callback that emits a ``PRE_CHECK_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "dag_id": "yfinance_pre_check_dag",
@@ -23,7 +28,11 @@ def _on_failure(context):
     tags=["pre-check", "test", "yfinance"],
 )
 def yfinance_pre_check_dag():
+    """Verify that Yahoo Finance is reachable by downloading a test price series.
 
+    Task flow:
+        check_yfinance_connection
+    """
     logger = logging.getLogger("airflow.pre_checks")
 
     @task(
@@ -33,6 +42,11 @@ def yfinance_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_yfinance_connection():
+        """Download one day of BAC price data to confirm Yahoo Finance is reachable.
+
+        Raises:
+            Exception: If no data is returned or the download raises an error.
+        """
         import yfinance as yf
         logger.info("Testing connection to Yahoo Finance using yfinance")
 

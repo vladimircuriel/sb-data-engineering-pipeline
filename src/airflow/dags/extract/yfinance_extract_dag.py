@@ -38,6 +38,11 @@ from utils.requests import safe_request
 
 
 def _on_dag_failure(context):
+    """DAG-level failure callback that emits an ``EXTRACTION_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow context dict provided automatically on DAG failure.
+    """
     task_id = context.get("task_instance", {}).task_id if context.get("task_instance") else "unknown"
     emit_event(EXTRACTION_FAILED, {
         "dag_id": context.get("dag_run", {}).dag_id if context.get("dag_run") else "unknown",
@@ -47,6 +52,11 @@ def _on_dag_failure(context):
 
 
 def _on_precheck_failure(context):
+    """Task-level failure callback for pre-check trigger tasks that emits a ``PRE_CHECK_FAILED`` event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "task_id": ti.task_id if ti else "unknown",
@@ -55,6 +65,11 @@ def _on_precheck_failure(context):
 
 
 def _on_extract_failure(context):
+    """Task-level failure callback for extraction tasks that emits an ``EXTRACT_ERROR`` event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(EXTRACT_ERROR, {
         "task_id": ti.task_id if ti else "unknown",
@@ -71,7 +86,25 @@ def _on_extract_failure(context):
     on_failure_callback=_on_dag_failure,
 )
 def yfinance_extract_banks_dag():
+    """Extract Yahoo Finance data for all configured bank tickers and load it into PostgreSQL.
 
+    Runs two pre-check DAGs in parallel (yfinance and PostgreSQL landing), then
+    extracts basic company info, daily prices, quarterly fundamentals,
+    institutional holders, and analyst recommendations.  All datasets are
+    consolidated per ticker and written to the landing zone in a single
+    transaction.  Ingestion metrics and volume anomalies are persisted
+    afterwards.
+
+    Task flow::
+
+        [trigger_yfinance_precheck, trigger_postgres_precheck]
+            >> prechecks_done
+            >> [get_last_*_date_task, fetch_basic_info]
+            >> fetch_[price | fundamentals | holders | recommendations]
+            >> consolidate_data
+            >> load_to_landing
+            >> [save_metadata, save_metrics]
+    """
     logger = logging.getLogger("airflow.extract")
 
     trigger_yfinance_precheck = TriggerDagRunOperator(
@@ -93,6 +126,13 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_basic_info():
+        """Fetch company profile data for all bank tickers from Yahoo Finance.
+
+        Returns:
+            list[dict]: One dict per successfully fetched ticker containing
+            ``symbol``, ``industry``, ``sector``, ``employees``, ``city``,
+            ``phone``, ``state``, ``country``, ``website``, and ``address``.
+        """
         import yfinance as yf
         logger.info("Extracting bank company profiles")
         results = []
@@ -133,6 +173,19 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_price(last_price_date):
+        """Download daily OHLCV price data for all bank tickers.
+
+        Uses ``last_price_date`` as the incremental start date when available;
+        otherwise falls back to the global ``DATE_START`` / ``DATE_END`` window.
+
+        Args:
+            last_price_date: Most recent date already in the landing zone, or
+                ``None`` for a full historical load.
+
+        Returns:
+            list[dict]: Flat list of price dicts, each containing ``ticker``,
+            ``date``, ``open``, ``high``, ``low``, ``close``, and ``volume``.
+        """
         import pandas as pd
         import yfinance as yf
         logger.info("Extracting stock prices")
@@ -185,6 +238,19 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_fundamentals(last_fundamentals_date):
+        """Download quarterly balance-sheet snapshots for all bank tickers.
+
+        Filters columns (quarters) to those newer than ``last_fundamentals_date``
+        and within the configured end date so only incremental data is returned.
+
+        Args:
+            last_fundamentals_date: Most recent fundamentals date in the landing
+                zone, or ``None`` for a full historical load.
+
+        Returns:
+            list[dict]: One dict per ticker/quarter combination containing
+            ``ticker``, ``date``, ``assets``, ``debt``, and ``shares``.
+        """
         import pandas as pd
         import yfinance as yf
         start = str(last_fundamentals_date) if last_fundamentals_date else DATE_START
@@ -231,6 +297,19 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_holders(last_holders_date):
+        """Download institutional holder records for all bank tickers.
+
+        Filters results to holder dates strictly after ``last_holders_date`` to
+        support incremental loads.
+
+        Args:
+            last_holders_date: Most recent holder date in the landing zone, or
+                ``None`` for a full historical load.
+
+        Returns:
+            list[dict]: One dict per holder/ticker record containing ``ticker``,
+            ``holder``, ``shares``, ``value``, and ``date``.
+        """
         import pandas as pd
         import yfinance as yf
         start = str(last_holders_date) if last_holders_date else DATE_START
@@ -279,6 +358,19 @@ def yfinance_extract_banks_dag():
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
     def fetch_recommendations(last_recommendations_date):
+        """Download analyst upgrade/downgrade records for all bank tickers.
+
+        Filters by grade date to return only recommendations newer than
+        ``last_recommendations_date`` and up to today.
+
+        Args:
+            last_recommendations_date: Most recent recommendation date in the
+                landing zone, or ``None`` for a full historical load.
+
+        Returns:
+            list[dict]: One dict per recommendation containing ``ticker``,
+            ``date``, ``firm``, ``to_grade``, ``from_grade``, and ``action``.
+        """
         import pandas as pd
         import yfinance as yf
         start = str(last_recommendations_date) if last_recommendations_date else DATE_START
@@ -327,9 +419,30 @@ def yfinance_extract_banks_dag():
 
     @task(retries=2, retry_delay=timedelta(seconds=10))
     def consolidate_data(basic_info, prices, fundamentals, holders, recommendations):
+        """Merge all extracted datasets into a per-ticker consolidated structure.
+
+        Args:
+            basic_info: Output of ``fetch_basic_info``.
+            prices: Output of ``fetch_price``.
+            fundamentals: Output of ``fetch_fundamentals``.
+            holders: Output of ``fetch_holders``.
+            recommendations: Output of ``fetch_recommendations``.
+
+        Returns:
+            list[dict]: One dict per ticker with keys ``ticker``, ``basic_info``,
+            ``prices``, ``fundamentals``, ``holders``, and ``recommendations``.
+        """
         logger.info("Consolidating all extracted data")
 
         def group_by_ticker(data: list[dict]) -> dict:
+            """Group a flat list of dicts by their ``ticker`` key.
+
+            Args:
+                data: List of dicts that each contain a ``ticker`` key.
+
+            Returns:
+                dict: Mapping of ticker symbol to a list of matching records.
+            """
             grouped: dict = {}
             for r in data:
                 grouped.setdefault(r["ticker"], []).append(r)
@@ -357,6 +470,21 @@ def yfinance_extract_banks_dag():
 
     @task(retries=3, retry_delay=timedelta(seconds=10))
     def load_to_landing(consolidated):
+        """Write consolidated extraction results to the PostgreSQL landing zone.
+
+        Applies an incremental cutoff so only price rows newer than the latest
+        stored date are inserted.  Skips the insert entirely when no new rows
+        exist, emitting a ``NO_NEW_DATA`` event.  On a successful write it
+        emits ``DATA_LANDED`` and returns metrics and anomaly information for
+        downstream tasks.
+
+        Args:
+            consolidated: Output of ``consolidate_data``.
+
+        Returns:
+            dict: Contains ``consolidated``, ``skipped`` (bool), and —when not
+            skipped— ``metrics`` and ``anomalies``.
+        """
         logger.info("Loading consolidated data to PostgreSQL landing zone")
 
         last_price_date = get_last_price_date()
@@ -398,6 +526,11 @@ def yfinance_extract_banks_dag():
 
     @task
     def save_metadata(load_result):
+        """Persist run metadata to ``yfinance_run_metadata`` unless the load was skipped.
+
+        Args:
+            load_result: Return value of ``load_to_landing``.
+        """
         if load_result.get("skipped"):
             logger.info("No new data, skipping metadata save")
             return
@@ -411,6 +544,11 @@ def yfinance_extract_banks_dag():
 
     @task
     def save_metrics(load_result):
+        """Persist ingestion metrics and anomalies to ``yfinance_ingestion_metrics`` unless skipped.
+
+        Args:
+            load_result: Return value of ``load_to_landing``.
+        """
         if load_result.get("skipped"):
             logger.info("No new data, skipping metrics save")
             return
@@ -425,22 +563,51 @@ def yfinance_extract_banks_dag():
 
     @task
     def get_last_price_date_task():
+        """Airflow task wrapper for :func:`~db.landing.get_last_price_date`.
+
+        Returns:
+            datetime.date | None: Latest price date in the landing zone.
+        """
         return get_last_price_date()
 
     @task
     def get_last_fundamentals_date_task():
+        """Airflow task wrapper for :func:`~db.landing.get_last_fundamentals_date`.
+
+        Returns:
+            datetime.date | None: Latest fundamentals date in the landing zone.
+        """
         return get_last_fundamentals_date()
 
     @task
     def get_last_holders_date_task():
+        """Airflow task wrapper for :func:`~db.landing.get_last_holders_date`.
+
+        Returns:
+            datetime.date | None: Latest holders date in the landing zone.
+        """
         return get_last_holders_date()
 
     @task
     def get_last_recommendations_date_task():
+        """Airflow task wrapper for :func:`~db.landing.get_last_recommendations_date`.
+
+        Returns:
+            datetime.date | None: Latest recommendations date in the landing zone.
+        """
         return get_last_recommendations_date()
 
     @task
     def prechecks_done(postgres_result, yfinance_result):
+        """Join task that waits for both pre-check DAGs to complete successfully.
+
+        Acts as a fan-in synchronisation point so that extraction tasks only
+        start after both the PostgreSQL and yfinance pre-checks have passed.
+
+        Args:
+            postgres_result: Output of the PostgreSQL pre-check trigger task.
+            yfinance_result: Output of the yfinance pre-check trigger task.
+        """
         pass
 
     join = prechecks_done(trigger_postgres_precheck.output, trigger_yfinance_precheck.output)

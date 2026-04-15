@@ -9,6 +9,11 @@ from utils.events import PRE_CHECK_FAILED, emit_event
 
 
 def _on_failure(context):
+    """Airflow failure callback that emits a ``PRE_CHECK_FAILED`` pipeline event.
+
+    Args:
+        context: Airflow task context dict provided automatically on failure.
+    """
     ti = context.get("task_instance")
     emit_event(PRE_CHECK_FAILED, {
         "dag_id": "clickhouse_pre_check_dag",
@@ -25,7 +30,11 @@ def _on_failure(context):
     tags=["pre-check", "clickhouse"],
 )
 def clickhouse_pre_check_dag():
+    """Verify that ClickHouse is reachable via its HTTP interface.
 
+    Task flow:
+        check_clickhouse_connection
+    """
     logger = logging.getLogger("airflow.pre_checks")
 
     @task(
@@ -35,6 +44,11 @@ def clickhouse_pre_check_dag():
         on_failure_callback=_on_failure,
     )
     def check_clickhouse_connection():
+        """Execute ``SELECT 1`` against ClickHouse and assert the response equals ``1``.
+
+        Raises:
+            Exception: If ClickHouse is unreachable or returns an unexpected result.
+        """
         host = os.environ.get("CLICKHOUSE_HOST", "clickhouse")
         port = os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")
         user = os.environ.get("CLICKHOUSE_USER", "admin")
