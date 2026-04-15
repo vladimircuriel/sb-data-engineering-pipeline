@@ -5,7 +5,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import Variable
 
 from db.connection import get_conn
-from utils.events import NO_NEW_DATA, emit_event
+from utils.events import NO_NEW_DATA, SYNC_TRIGGERED, emit_event
 
 
 @dag(
@@ -56,6 +56,7 @@ def landing_zone_polling_dag():
             return False
 
         logger.info(f"Detected {new_runs} new landing run(s) since last sync — triggering sync")
+        emit_event(SYNC_TRIGGERED, {"dag_id": "landing_to_clickhouse_sync_dag", "new_runs": new_runs, "last_sync_at": last_sync_at})
         return True
 
     trigger_sync = TriggerDagRunOperator(

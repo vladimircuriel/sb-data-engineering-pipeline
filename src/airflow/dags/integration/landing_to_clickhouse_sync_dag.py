@@ -95,11 +95,18 @@ def landing_to_clickhouse_sync_dag():
             logger.info(f"Watermark updated to {latest}")
             emit_event(DATA_LANDED, {"synced_up_to": str(latest)})
 
+    trigger_dbt = TriggerDagRunOperator(
+        task_id="trigger_dbt_run",
+        trigger_dag_id="dbt_run_dag",
+        wait_for_completion=False,
+    )
+
     (
         [trigger_airbyte_precheck, trigger_postgres_precheck, trigger_clickhouse_precheck]
         >> sync_landing_to_clickhouse
         >> wait_for_sync
         >> update_watermark()
+        >> trigger_dbt
     )
 
 

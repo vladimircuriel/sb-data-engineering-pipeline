@@ -1,15 +1,12 @@
 import logging
 
-import pandas as pd
-import yfinance as yf
-
 from airflow.sdk import dag, task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 from config.tickers import BANK_TICKERS
 from db.landing import get_last_price_date
 from utils.dataframe import validate_df
-from utils.events import NO_NEW_DATA, emit_event
+from utils.events import NO_NEW_DATA, SYNC_TRIGGERED, emit_event
 from utils.requests import safe_request
 
 
@@ -31,6 +28,8 @@ def yfinance_polling_dag():
 
     @task.short_circuit
     def has_enough_new_data(**context):
+        import pandas as pd
+        import yfinance as yf
         min_new_days: int = context["params"]["min_new_days"]
         logger.info(f"Polling — threshold: {min_new_days} new trading day(s) required")
 
@@ -69,6 +68,8 @@ def yfinance_polling_dag():
         enough = len(new_dates) >= min_new_days
         if not enough:
             emit_event(NO_NEW_DATA, {"new_days": len(new_dates), "threshold": min_new_days})
+        else:
+            emit_event(SYNC_TRIGGERED, {"dag_id": "yfinance_extract_banks_dag", "new_days": len(new_dates)})
         return enough
 
     trigger_yfinance_precheck = TriggerDagRunOperator(
