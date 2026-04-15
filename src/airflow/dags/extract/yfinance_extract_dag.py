@@ -12,12 +12,18 @@ from config.tickers import BANK_TICKERS, DATE_END, DATE_START
 from db.connection import get_conn
 from db.landing import (
     create_tables,
+    get_last_fundamentals_date,
+    get_last_holders_date,
     get_last_price_date,
+    get_last_recommendations_date,
     get_prev_rows_inserted,
+    insert_fundamentals,
+    insert_holders,
     insert_ingestion_metrics,
     insert_metadata,
-    insert_raw,
-    truncate_raw,
+    insert_prices,
+    insert_recommendations,
+    upsert_company,
 )
 from utils.anomaly import detect_volume_anomalies
 from utils.dataframe import validate_df
@@ -140,6 +146,7 @@ def yfinance_extract_banks_dag():
                 else:
                     start = DATE_START
                     end = DATE_END
+
                 logger.info(f"{t} fetching price data {start} to {end}")
                 df = safe_request(lambda: yf.download(t, start=start, end=end), t)
                 if df is None or df.empty:
@@ -177,8 +184,10 @@ def yfinance_extract_banks_dag():
 
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
-    def fetch_fundamentals():
-        logger.info(f"Extracting quarterly fundamentals {DATE_START} to {DATE_END}")
+    def fetch_fundamentals(last_fundamentals_date):
+        start = str(last_fundamentals_date) if last_fundamentals_date else DATE_START
+        end = str(date.today()) if last_fundamentals_date else DATE_END
+        logger.info(f"Extracting quarterly fundamentals {start} to {end}")
         results = []
 
         for t in BANK_TICKERS:
@@ -192,7 +201,7 @@ def yfinance_extract_banks_dag():
 
                 for col in df.columns:
                     col_date = pd.Timestamp(col).date().isoformat()
-                    if col_date < DATE_START or col_date > DATE_END:
+                    if col_date <= start or col_date > end:
                         continue
 
                     snapshot = df[col]
@@ -219,8 +228,9 @@ def yfinance_extract_banks_dag():
 
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
-    def fetch_holders():
-        logger.info("Extracting institutional holders")
+    def fetch_holders(last_holders_date):
+        start = str(last_holders_date) if last_holders_date else DATE_START
+        logger.info(f"Extracting institutional holders since {start}")
         results = []
 
         for t in BANK_TICKERS:
@@ -232,8 +242,14 @@ def yfinance_extract_banks_dag():
                     logger.warning(f"{t} no holders data found")
                     continue
 
+                df["Date Reported"] = pd.to_datetime(df["Date Reported"]).dt.date
+                df = df[df["Date Reported"] > pd.Timestamp(start).date()]
+                if df.empty:
+                    logger.info(f"{t} no new holders since {start}")
+                    continue
+
                 df["Date Reported"] = df["Date Reported"].astype(str)
-                logger.info(f"{t} holders found: {len(df)} rows")
+                logger.info(f"{t} new holders: {len(df)} rows")
 
                 for _, row in df.iterrows():
                     shares = row["Shares"]
@@ -258,8 +274,10 @@ def yfinance_extract_banks_dag():
 
     @task(retries=3, retry_delay=timedelta(seconds=10), retry_exponential_backoff=True,
           on_failure_callback=_on_extract_failure)
-    def fetch_recommendations():
-        logger.info(f"Extracting analyst recommendations {DATE_START} to {DATE_END}")
+    def fetch_recommendations(last_recommendations_date):
+        start = str(last_recommendations_date) if last_recommendations_date else DATE_START
+        end = str(date.today()) if last_recommendations_date else DATE_END
+        logger.info(f"Extracting analyst recommendations {start} to {end}")
         results = []
 
         for t in BANK_TICKERS:
@@ -273,26 +291,25 @@ def yfinance_extract_banks_dag():
 
                 df = df.reset_index()
                 df["GradeDate"] = pd.to_datetime(df["GradeDate"])
-                df = df[(df["GradeDate"] >= DATE_START) & (df["GradeDate"] <= DATE_END)]
+                df = df[(df["GradeDate"] > start) & (df["GradeDate"] <= end)]
 
                 if df.empty:
-                    logger.warning(f"{t} no recommendations in date range")
+                    logger.info(f"{t} no new recommendations since {start}")
                     continue
 
-                df["GradeDate"] = df["GradeDate"].astype(str)
+                df["GradeDate"] = df["GradeDate"].dt.date.astype(str)
 
                 for _, row in df.iterrows():
-                    entry = {
+                    results.append({
                         "ticker": t,
                         "date": row["GradeDate"],
                         "firm": row["Firm"],
                         "to_grade": row["ToGrade"],
                         "from_grade": row["FromGrade"],
                         "action": row["Action"],
-                    }
-                    results.append(entry)
+                    })
 
-                logger.info(f"{t} recommendations in range: {len(df)}")
+                logger.info(f"{t} new recommendations since {start}: {len(df)}")
 
                 time.sleep(1)
 
@@ -351,7 +368,6 @@ def yfinance_extract_banks_dag():
             logger.info("No new data to load, skipping insert")
             return {"consolidated": consolidated, "skipped": True}
 
-        # Compute metrics and anomalies after filtering
         metrics = compute_ingestion_metrics(consolidated)
         prev_rows = get_prev_rows_inserted()
         anomalies = detect_volume_anomalies(metrics, prev_rows)
@@ -361,12 +377,17 @@ def yfinance_extract_banks_dag():
         with get_conn() as conn:
             with conn.cursor() as cur:
                 create_tables(cur)
-                truncate_raw(cur)
-                insert_raw(cur, consolidated)
+                for row in consolidated:
+                    ticker = row["ticker"]
+                    upsert_company(cur, row["basic_info"])
+                    insert_prices(cur, ticker, row.get("prices") or [])
+                    insert_fundamentals(cur, ticker, row.get("fundamentals") or [])
+                    insert_holders(cur, ticker, row.get("holders") or [])
+                    insert_recommendations(cur, ticker, row.get("recommendations") or [])
             conn.commit()
 
         emit_event(DATA_LANDED, {"tickers_loaded": len(consolidated), "price_rows": total_new_rows})
-        logger.info(f"Loaded {len(consolidated)} tickers ({total_new_rows} price rows) into yfinance_raw")
+        logger.info(f"Loaded {len(consolidated)} tickers ({total_new_rows} new price rows)")
         return {"consolidated": consolidated, "metrics": metrics, "anomalies": anomalies, "skipped": False}
 
     @task
@@ -400,28 +421,44 @@ def yfinance_extract_banks_dag():
     def get_last_price_date_task():
         return get_last_price_date()
 
-    # Task flow
-    last_date = get_last_price_date_task()
+    @task
+    def get_last_fundamentals_date_task():
+        return get_last_fundamentals_date()
+
+    @task
+    def get_last_holders_date_task():
+        return get_last_holders_date()
+
+    @task
+    def get_last_recommendations_date_task():
+        return get_last_recommendations_date()
+
+    @task
+    def prechecks_done(postgres_result, yfinance_result):
+        pass
+
+    join = prechecks_done(trigger_postgres_precheck.output, trigger_yfinance_precheck.output)
+
+    last_price = get_last_price_date_task()
+    last_fundamentals = get_last_fundamentals_date_task()
+    last_holders = get_last_holders_date_task()
+    last_recs = get_last_recommendations_date_task()
     basic = fetch_basic_info()
-    price = fetch_price(last_date)
-    fundamentals = fetch_fundamentals()
-    holders = fetch_holders()
-    recs = fetch_recommendations()
+
+    (
+        join
+        >> [last_price, last_fundamentals, last_holders, last_recs, basic]
+    )
+
+    price = fetch_price(last_price)
+    fundamentals = fetch_fundamentals(last_fundamentals)
+    holders = fetch_holders(last_holders)
+    recs = fetch_recommendations(last_recs)
+
     consolidated = consolidate_data(basic, price, fundamentals, holders, recs)
     loaded = load_to_landing(consolidated)
-    meta = save_metadata(loaded)
-    saved_metrics = save_metrics(loaded)
-
-    trigger_postgres_precheck >> trigger_yfinance_precheck >> last_date
-    last_date >> basic
-    last_date >> fundamentals
-    last_date >> holders
-    last_date >> recs
-    basic >> consolidated
-    price >> consolidated
-    fundamentals >> consolidated
-    holders >> consolidated
-    recs >> consolidated
+    save_metadata(loaded)
+    save_metrics(loaded)
 
 
 yfinance_extract_banks_dag()
