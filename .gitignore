@@ -9,3 +9,6 @@ src/airflow/config/*.env
 *.pyc
 *.pyo
 *.pyd
+src/dbt/logs/
+src/dbt/target/
+src/dbt/.user.yml
