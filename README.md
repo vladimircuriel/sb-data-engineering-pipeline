@@ -466,6 +466,25 @@ to trigger extraction and synchronization when new data is detected.
 
 ![PostgreSQL Landing](docs/images/postgres-landing.png)
 
+### Demo
+
+<a href="https://www.youtube.com/watch?v=Z6hAF-3kU1A" target="_blank"
+style="
+display:inline-block;
+background-color:#FF0000;
+color:white;
+padding:12px 20px;
+text-decoration:none;
+font-weight:bold;
+border-radius:6px;
+font-family:Arial, sans-serif;
+font-size:14px;
+box-shadow:0 2px 4px rgba(0,0,0,0.2);
+">
+▶ Ver en YouTube
+</a>
+
+
 ## Known Limitations
 
 - Airbyte connection setup is not fully declarative yet and still requires manual UI configuration. This tradeoff was accepted because the project uses `abctl` as the official local installation path for Airbyte OSS, while Airbyte has documented the transition away from the previous Docker Compose-based deployment approach in favor of `abctl` and Kubernetes-based local installs. References:
